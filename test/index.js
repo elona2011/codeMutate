@@ -1,0 +1,1 @@
+import { fnA } from "./a";
