@@ -4,95 +4,92 @@ const rollup = require('./service/rollup')
 const path = require('path')
 
 const cm = {}
-cm.editEnv = require('./ast/editEnv')
+cm['.editEnv'] = require('./ast/editEnv')
 // const { editObfus } = require('./ast/obfus')
-cm.toES5 = require('./service/babel')
-cm.uglify = require('./service/uglify')
+cm['.toES5'] = require('./service/babel')
+cm['.uglify'] = require('./service/uglify')
 
 /**
  * options.outputDir 输出目录，默认为当前项目.dist
  * options.inputDir 输入目录，默认为当前项目src
  * options.outputNum 输出文件数量，默认为1
- * options.env 设置环境，将影响与环境相关代码
+ * options.env 设置环境，将影响与环境相关代码，默认取process.env.NODE_ENV
  * options.hostname ajax/jsonp请求的hostname
  * options.rollup 对象，rollup打包设置
  * options.keyMutation 一个对象，key为字典名,value为需要乱序的字典值
  */
 exports.build = async options => {
-  let pluginName = options.inputDir || 'src'
+  let fromDir = options.inputDir || 'src'
 
   //before rollup
-  pluginName = await doPlugin('beforeRollupPlugins', options, pluginName)
+  fromDir = await doPlugin('beforeRollupPlugins', options, fromDir)
 
   Object.values(options.rollup).forEach(n => {
-    n.inputOptions.input = path.join('.' + pluginName, n.inputOptions.input)
+    n.inputOptions.input = path.join(fromDir, n.inputOptions.input)
   })
+  //get rollup bundle dest
+  let dirs = Object.values(options.rollup).map(n => {
+    let folders = n.outputOptions.file.split('/')
+    if (folders.length < 2) throw new Error('rollup output file path error!')
+    return folders[0]
+  })
+
+  let rollupDist = dirs[0]
+  if (dirs.every(n => n === rollupDist)) {
+    fromDir = rollupDist
+  } else {
+    throw new Error('all rollup output file must under same folder!')
+  }
+  fse.emptyDirSync(`${process.cwd()}/${fromDir}`)
+
   return rollup(options).then(async () => {
-    //get rollup bundle dest
-    let dirs = Object.values(options.rollup).map(n => {
-      let folders = n.outputOptions.file.split('/')
-      if (folders.length < 2) throw new Error('rollup output file path error!')
-      return folders[0]
-    })
-
-    let rollupDist = dirs[0]
-    if (dirs.every(n => n === rollupDist)) {
-      pluginName = rollupDist[0] === '.' ? rollupDist.slice(1) : rollupDist
-    } else {
-      throw new Error('all rollup output file must under same folder!')
-    }
-
     //after rollup
-    pluginName = await doPlugin('afterRollupPlugins', options, pluginName)
+    fromDir = await doPlugin('afterRollupPlugins', options, fromDir)
 
-    let buildin = ['editEnv', 'toES5']
+    let buildin = ['.editEnv', '.toES5']
     for (let n of buildin) {
-      pluginName = await mutate(options, n, pluginName)
+      fromDir = await mutate(options, n, fromDir)
     }
 
     //before uglify
-    pluginName = await doPlugin('beforeUglifyPlugins', options, pluginName)
+    fromDir = await doPlugin('beforeUglifyPlugins', options, fromDir)
 
     //uglify
-    pluginName = mutate(options, 'uglify', pluginName)
+    fromDir = mutate(options, '.uglify', fromDir)
 
     //final output
     let output = options.outputDir || '.dist'
-    let distDir = path.resolve(process.cwd(), output, options.env)
+    let distDir = path.resolve(process.cwd(), output, options.env || process.env.NODE_ENV || 'dev')
     fse.emptyDirSync(distDir)
-    fse.copySync(`${process.cwd()}/.${pluginName}`, distDir)
-    console.log(`output to ${output}: success`)
+    fse.copySync(`${process.cwd()}/${fromDir}`, distDir)
+    console.log(`${output} is ready`)
     // editClass()
     // editObfus()
   })
 }
 
-const mutate = (options, pluginName, fromPlugin) => {
-  fse.emptyDirSync(`${process.cwd()}/.${pluginName}`)
-  fse.copySync(`${process.cwd()}/.${fromPlugin}`, `${process.cwd()}/.${pluginName}`)
-  glob
-    .sync(`${process.cwd()}/.${pluginName}/**/*.js`)
-    .forEach(n => cm[pluginName] && cm[pluginName](n, options))
+const mutate = (options, toDir, fromDir) => {
+  fse.emptyDirSync(`${process.cwd()}/${toDir}`)
+  fse.copySync(`${process.cwd()}/${fromDir}`, `${process.cwd()}/${toDir}`)
+  glob.sync(`${process.cwd()}/${toDir}/**/*.js`).forEach(n => cm[toDir] && cm[toDir](n, options))
 
-  console.log(`buildin plugin ${pluginName}: success`)
-  return pluginName
+  console.log(`${toDir} is ready`)
+  return toDir
 }
 
-const doPlugin = async (pluginType, options, fromPlugin) => {
+const doPlugin = async (pluginType, options, fromDir) => {
   let plugins = options[pluginType]
 
   if (plugins && plugins.length > 0) {
     if (plugins.length === 1) {
-      fromPlugin = await plugins[0](options, fromPlugin)
-      console.log(`foreign plugin ${fromPlugin}: success`)
+      fromDir = await plugins[0](options, fromDir)
+      console.log(`${fromDir} is ready`)
     } else if (plugins.length > 1) {
       for (let n of plugins) {
-        fromPlugin = await n(options, fromPlugin)
-        console.log(`foreign plugin ${fromPlugin}: success`)
+        fromDir = await n(options, fromDir)
+        console.log(`${fromDir} is ready`)
       }
     }
   }
-  return fromPlugin
+  return fromDir
 }
-
-const getPath = 
